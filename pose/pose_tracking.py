@@ -31,6 +31,7 @@ class pose_tracking:
         self.params = dict()
         self.params["model_folder"] = os.path.join(os.path.expanduser("~"), 'catkin_ws/src/openpose/models/', '')
         # self.params["number_people_max"] = 1
+        self.params["net_resolution"] = "-1x160"
 
         # Starting OpenPose
         self.opWrapper = op.WrapperPython()
