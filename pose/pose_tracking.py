@@ -20,8 +20,8 @@ class pose_tracking:
         rospy.loginfo("Started pose tracking node!")
 
         # subscribing to depth image and color version
-        rospy.Subscriber("/zed/zed_node/left/image_rect_color",Image, self.get_poses)
-        rospy.Subscriber("/zed/zed_node/depth/depth_registered",Image, self.classify_depth)
+        rospy.Subscriber("/zed/zed_node/left/image_rect_color", Image, self.get_poses, queue_size=1)
+        rospy.Subscriber("/zed/zed_node/depth/depth_registered", Image, self.classify_depth, queue_size=1)
         
         # publish cart empty
         self.cart_empty_safe_pub = rospy.Publisher('/cart_empty_safe', String, queue_size=10)
@@ -57,7 +57,7 @@ class pose_tracking:
         self.num_consecutive_passenger = 0
         self.num_consecutive_threshold = 5
 
-        rate = rospy.Rate(100)
+        rate = rospy.Rate(10)
         while not rospy.is_shutdown():
             rate.sleep()
         cv2.destroyAllWindows()
@@ -170,7 +170,7 @@ class pose_tracking:
                 if (self.num_consecutive_passenger > self.num_consecutive_threshold):
                     empty = False
             else:
-                self.num_consecutive_passenger = 0;
+                self.num_consecutive_passenger = 0
 
 
             # Process image for poses
