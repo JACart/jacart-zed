@@ -115,9 +115,9 @@ class pose_tracking:
 
             # set the locations of the chair key points 
             if(self.key_points is None):
-                left_x = 450
+                left_x = 480
                 center_x = x / 2
-                right_x = x - 450
+                right_x = x - 480
                 back_y = 450
                 seat_y = 700
                 self.key_points = [(left_x, back_y), (center_x, back_y), (right_x, back_y),
@@ -130,7 +130,7 @@ class pose_tracking:
                 print(self.usual_chair_dist)
 
             # flip the zed image right side up
-            cv_image = cv2.flip(cv_image, -1)
+            # cv_image = cv2.flip(cv_image, -1)
 
             # pre process image to remove anything that is not within our threshold (excludes 0 since that is black)
             mask = cv2.inRange(self.recorded_depth, 0.1, self.depth_threshold)
@@ -267,7 +267,7 @@ class pose_tracking:
             print(e)
 
         # flip
-        cv_image = cv2.flip(cv_image, -1)
+        # cv_image = cv2.flip(cv_image, -1)
 
         # remove areas that are farther than our cart distance threshold
         mask = cv2.inRange(cv_image, 0.0, self.depth_threshold)
