@@ -1,5 +1,6 @@
 import roslib
 import rospy
+import message_filters
 from message_filters import ApproximateTimeSynchronizer
 import sys
 import os
@@ -21,12 +22,12 @@ class pose_tracking:
         rospy.loginfo("Started pose tracking node!")
 
         # subscribing to depth image and color version
-        img_sub = rospy.Subscriber("/zed/zed_node/left/image_rect_color", Image, self.get_poses, queue_size=1)
-        depth_sub = rospy.Subscriber("/zed/zed_node/depth/depth_registered", Image, self.classify_depth, queue_size=1)
+        img_sub = message_filters.Subscriber("/zed/zed_node/left/image_rect_color", Image)
+        depth_sub = message_filters.Subscriber("/zed/zed_node/depth/depth_registered", Image)
         
         self.img_depth_synch = ApproximateTimeSynchronizer([img_sub, depth_sub],
                                                            queue_size=10,
-                                                           slop=.1)
+                                                           slop=.5)
 
         self.img_depth_synch.registerCallback(self.image_depth_callback)
         
@@ -96,6 +97,9 @@ class pose_tracking:
         '''
         Callback for left color zed image runs open pose publishes to empty safe
         '''
+
+        rospy.loginfo(img_msg.header.stamp)
+        rospy.loginfo(depth_msg.header.stamp)
         try:
             cv_image = self.bridge.imgmsg_to_cv2(img_msg, "bgr8")
         except CvBridgeError as e:
@@ -146,7 +150,7 @@ class pose_tracking:
 
         # get the default chair distances if not already done
         if(self.usual_chair_dist is None):
-            self.usual_chair_dist = self.get_usual_dist(cv_image)
+            self.usual_chair_dist = self.get_usual_dist(cv_image, cv_depth_image)
             print(self.usual_chair_dist)
 
         # flip the zed image right side up
