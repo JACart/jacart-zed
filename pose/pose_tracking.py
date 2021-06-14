@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import roslib
 import rospy
 import message_filters
@@ -16,7 +17,7 @@ from cv_bridge import CvBridge, CvBridgeError
 sys.path.append(os.path.join(os.path.expanduser("~"), 'catkin_ws/src/openpose/build/python', ''))
 from openpose import pyopenpose as op
 
-MAX_RATE = 5
+MAX_RATE = 5.0
 
 class pose_tracking:
 
@@ -104,8 +105,6 @@ class pose_tracking:
             return
         self.last_time = cur_time
 
-        rospy.loginfo(img_msg.header.stamp)
-        rospy.loginfo(depth_msg.header.stamp)
         try:
             cv_image = self.bridge.imgmsg_to_cv2(img_msg, "bgr8")
         except CvBridgeError as e:
@@ -215,60 +214,58 @@ class pose_tracking:
         # for those poses found 
         if poseKeypoints is not None and len(poseKeypoints) > 0:
             for pose in poseKeypoints:
-                try:
-                    # get x and y locations of neck and shoulders 
-                    x_neck = int(pose[1][0])
-                    y_neck = int(pose[1][1])
-                    x_left_shoulder = int(pose[2][0])
-                    y_left_shoulder = int(pose[2][1])
-                    x_right_shoulder = int(pose[5][0])
-                    y_right_shoulder = int(pose[5][1])
+            
+                # get x and y locations of neck and shoulders 
+                x_neck = int(pose[1][0])
+                y_neck = int(pose[1][1])
+                x_left_shoulder = int(pose[2][0])
+                y_left_shoulder = int(pose[2][1])
+                x_right_shoulder = int(pose[5][0])
+                y_right_shoulder = int(pose[5][1])
 
-                    # extract the distance from those recorded locations
-                    neck_distance = cv_depth_image[(y_neck, x_neck)]
-                    left_shoulder_dist = cv_depth_image[(y_left_shoulder, x_left_shoulder)]
-                    right_shoulder_dist = cv_depth_image[(y_right_shoulder, x_right_shoulder)]
+                # extract the distance from those recorded locations
+                neck_distance = cv_depth_image[(y_neck, x_neck)]
+                left_shoulder_dist = cv_depth_image[(y_left_shoulder, x_left_shoulder)]
+                right_shoulder_dist = cv_depth_image[(y_right_shoulder, x_right_shoulder)]
 
-                    distance = float("-inf")
+                distance = float("-inf")
 
-                    # Set distance as max of neck, left, and right shoulders, or defualt to nan
-                    if not math.isnan(neck_distance):
-                        distance = max(distance, neck_distance)
-                    if not math.isnan(left_shoulder_dist):
-                        distance = max(distance, left_shoulder_dist)
-                    if not math.isnan(right_shoulder_dist):
-                        distance = max(distance, right_shoulder_dist)
-                    if distance == float("-inf"):
-                        distance = float('NaN')
+                # Set distance as max of neck, left, and right shoulders, or defualt to nan
+                if not math.isnan(neck_distance):
+                    distance = max(distance, neck_distance)
+                if not math.isnan(left_shoulder_dist):
+                    distance = max(distance, left_shoulder_dist)
+                if not math.isnan(right_shoulder_dist):
+                    distance = max(distance, right_shoulder_dist)
+                if distance == float("-inf"):
+                    distance = float('NaN')
 
-                    # define what is considered in the boundaries
-                    in_boundaries = (x_left_shoulder > left_boundary
-                        and x_left_shoulder < right_boundary
-                        and x_right_shoulder > left_boundary
-                        and x_right_shoulder < right_boundary
-                        and y_left_shoulder > bottom_boundary
-                        and y_right_shoulder > bottom_boundary)
+                # define what is considered in the boundaries
+                in_boundaries = (x_left_shoulder > left_boundary
+                    and x_left_shoulder < right_boundary
+                    and x_right_shoulder > left_boundary
+                    and x_right_shoulder < right_boundary
+                    and y_left_shoulder > bottom_boundary
+                    and y_right_shoulder > bottom_boundary)
 
-                    # define distance text
-                    distance_text = "dist: {:.2f}".format(distance)
+                # define distance text
+                distance_text = "dist: {:.2f}".format(distance)
 
-                    # in boundaries with within our distance threshold
-                    if (in_boundaries):
-                        valid_pose += 1
-                        cv2.putText(cv_image, distance_text, (x_left_shoulder + 5, y_left_shoulder + 5), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA, False)
-                        cv2.circle(cv_image, (x_neck, y_neck), 4, (0, 255, 0), thickness=2)
-                        cv2.circle(cv_image, (x_left_shoulder, y_left_shoulder), 4, (0, 255, 0), thickness=2)
-                        cv2.circle(cv_image, (x_right_shoulder, y_right_shoulder), 4, (0, 255, 0), thickness=2)
-                    else:
-                        invalid_pose += 1
-                        cv2.putText(cv_image, distance_text, (x_left_shoulder + 5, y_left_shoulder + 5), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA, False)
-                        cv2.circle(cv_image, (x_neck, y_neck), 4, (0, 0, 255), thickness=2)
-                        cv2.circle(cv_image, (x_left_shoulder, y_left_shoulder), 4, (0, 0, 255), thickness=2)
-                        cv2.circle(cv_image, (x_right_shoulder, y_right_shoulder), 4, (0, 0, 255), thickness=2)
-                except Exception as e:
-                    print(e)
+                # in boundaries with within our distance threshold
+                if (in_boundaries):
+                    valid_pose += 1
+                    cv2.putText(cv_image, distance_text, (x_left_shoulder + 5, y_left_shoulder + 5), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA, False)
+                    cv2.circle(cv_image, (x_neck, y_neck), 4, (0, 255, 0), thickness=2)
+                    cv2.circle(cv_image, (x_left_shoulder, y_left_shoulder), 4, (0, 255, 0), thickness=2)
+                    cv2.circle(cv_image, (x_right_shoulder, y_right_shoulder), 4, (0, 255, 0), thickness=2)
+                else:
+                    invalid_pose += 1
+                    cv2.putText(cv_image, distance_text, (x_left_shoulder + 5, y_left_shoulder + 5), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA, False)
+                    cv2.circle(cv_image, (x_neck, y_neck), 4, (0, 0, 255), thickness=2)
+                    cv2.circle(cv_image, (x_left_shoulder, y_left_shoulder), 4, (0, 0, 255), thickness=2)
+                    cv2.circle(cv_image, (x_right_shoulder, y_right_shoulder), 4, (0, 0, 255), thickness=2)
 
         passenger_safe = True
         
@@ -283,7 +280,6 @@ class pose_tracking:
 
 
         self.sendCartEmptyPose(empty, passenger_safe)
-        rospy.loginfo("leaving 1")
         img_msg_out = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
         self.image_pub.publish(img_msg_out)
 

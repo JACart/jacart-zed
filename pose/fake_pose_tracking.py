@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import rospy
 import sys
 import os
@@ -67,3 +68,4 @@ if __name__ == "__main__":
         fake_pose_tracking()
     except rospy.ROSInterruptException:
         pass
+
