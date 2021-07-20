@@ -1,8 +1,12 @@
+#!/usr/bin/env python
 import roslib
 import rospy
+import message_filters
+from message_filters import TimeSynchronizer
 import sys
 import os
 import math
+import time
 import json
 from std_msgs.msg import String, Bool
 from sensor_msgs.msg import Image
@@ -13,6 +17,8 @@ from cv_bridge import CvBridge, CvBridgeError
 sys.path.append(os.path.join(os.path.expanduser("~"), 'catkin_ws/src/openpose/build/python', ''))
 from openpose import pyopenpose as op
 
+MAX_RATE = 5.0
+
 class pose_tracking:
 
     def __init__(self):
@@ -20,12 +26,20 @@ class pose_tracking:
         rospy.loginfo("Started pose tracking node!")
 
         # subscribing to depth image and color version
-        rospy.Subscriber("/zed/zed_node/left/image_rect_color", Image, self.get_poses, queue_size=1)
-        rospy.Subscriber("/zed/zed_node/depth/depth_registered", Image, self.classify_depth, queue_size=1)
+        img_sub = message_filters.Subscriber("/zed/zed_node/left/image_rect_color", Image)
+        depth_sub = message_filters.Subscriber("/zed/zed_node/depth/depth_registered", Image)
+        
+        self.img_depth_synch = TimeSynchronizer([img_sub, depth_sub],
+                                                           queue_size=10)
+
+        self.img_depth_synch.registerCallback(self.image_depth_callback)
         
         # publish cart empty
         self.cart_empty_safe_pub = rospy.Publisher('/cart_empty_safe', String, queue_size=10)
         self.bridge = CvBridge()
+
+        self.image_pub = rospy.Publisher('pose_image', Image,
+                                         queue_size=10)
 
         # set up openpose params
         self.params = dict()
@@ -38,8 +52,7 @@ class pose_tracking:
         self.opWrapper.configure(self.params)
         self.opWrapper.start()
 
-        # depth (set by classify_depth)
-        self.recorded_depth = None
+        self.last_time = -1.0
 
         # depth threshold (filter cv image to be black beyond this distance)
         self.depth_threshold = 1.2 # meters
@@ -58,9 +71,7 @@ class pose_tracking:
         self.num_consecutive_passenger = 0
         self.num_consecutive_threshold = 5
 
-        rate = rospy.Rate(10)
-        while not rospy.is_shutdown():
-            rate.sleep()
+        rospy.spin()
         cv2.destroyAllWindows()
 
     def sendCartEmptyPose(self, empty, safe):
@@ -71,7 +82,7 @@ class pose_tracking:
         print(empty_safe_state)
         self.cart_empty_safe_pub.publish(empty_safe_state)
 
-    def get_usual_dist(self, cv_image):
+    def get_usual_dist(self, cv_image, cv_depth_image):
         '''
         Sets the distances for the six chair points at launch
         '''
@@ -81,18 +92,37 @@ class pose_tracking:
         # get the distances of key points
         for index in range(len(self.key_points)):
             point_x, point_y = self.key_points[index]
-            if (self.recorded_depth[(point_y, point_x)] > 0):
-                usual_dist[index] = self.recorded_depth[(point_y, point_x)]
+            if (cv_depth_image[(point_y, point_x)] > 0):
+                usual_dist[index] = cv_depth_image[(point_y, point_x)]
         return usual_dist
 
-    def get_poses(self, data):
+    def image_depth_callback(self, img_msg, depth_msg):
         '''
         Callback for left color zed image runs open pose publishes to empty safe
         '''
+        cur_time = time.time()
+        if cur_time < self.last_time + 1.0 / MAX_RATE:
+            return
+        self.last_time = cur_time
+
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
+            cv_image = self.bridge.imgmsg_to_cv2(img_msg, "bgr8")
         except CvBridgeError as e:
             print(e)
+
+
+        try:
+            cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, "32FC1")
+        except CvBridgeError as e:
+            print(e)
+
+        # remove areas that are farther than our cart distance threshold
+        mask = cv2.inRange(cv_depth_image, 0.0, self.depth_threshold)
+        cv_depth_image = cv2.bitwise_and(cv_depth_image, cv_depth_image, mask=mask)
+
+        # smooth the image
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        cv_depth_image = cv2.dilate(cv_depth_image, kernel, 1)
 
         # draw the left and right boundaries for valid a cart position
         # NOTE 290 hardcoded # GREEN
@@ -111,81 +141,81 @@ class pose_tracking:
         # empty checks four points to determine if a passenger is present 
         empty = True
 
-        if self.recorded_depth is not None:
 
-            # set the locations of the chair key points 
-            if(self.key_points is None):
-                left_x = 480
-                center_x = x / 2
-                right_x = x - 480
-                back_y = 450
-                seat_y = 700
-                self.key_points = [(left_x, back_y), (center_x, back_y), (right_x, back_y),
-                (left_x, seat_y), (center_x, seat_y), (right_x, seat_y)]
-                print(self.key_points)
+        # set the locations of the chair key points 
+        if(self.key_points is None):
+            left_x = 480
+            center_x = x / 2
+            right_x = x - 480
+            back_y = 450
+            seat_y = 700
+            self.key_points = [(left_x, back_y), (center_x, back_y), (right_x, back_y),
+            (left_x, seat_y), (center_x, seat_y), (right_x, seat_y)]
+            print(self.key_points)
 
-            # get the default chair distances if not already done
-            if(self.usual_chair_dist is None):
-                self.usual_chair_dist = self.get_usual_dist(cv_image)
-                print(self.usual_chair_dist)
+        # get the default chair distances if not already done
+        if(self.usual_chair_dist is None):
+            self.usual_chair_dist = self.get_usual_dist(cv_image, cv_depth_image)
+            print(self.usual_chair_dist)
 
-            # flip the zed image right side up
-            # cv_image = cv2.flip(cv_image, -1)
+        # flip the zed image right side up
+        # cv_image = cv2.flip(cv_image, -1)
 
-            # pre process image to remove anything that is not within our threshold (excludes 0 since that is black)
-            mask = cv2.inRange(self.recorded_depth, 0.1, self.depth_threshold)
-            cv_image = cv2.bitwise_and(cv_image, cv_image, mask=mask)
+        # pre process image to remove anything that is not within our threshold (excludes 0 since that is black)
+        mask = cv2.inRange(cv_depth_image, 0.1, self.depth_threshold)
+        cv_image = cv2.bitwise_and(cv_image, cv_image, mask=mask)
 
-            # how many points are NOT empty
-            num_not_empty = 0
+        # how many points are NOT empty
+        num_not_empty = 0
 
-            # determine how many points are NOT empty
-            for index in range(len(self.key_points)):
-                # get x,y of empty points
-                point_x, point_y = self.key_points[index]
+        # determine how many points are NOT empty
+        for index in range(len(self.key_points)):
+            # get x,y of empty points
+            point_x, point_y = self.key_points[index]
 
-                # get the distance set on startup to compare to the actual distance
-                usual_dist = self.usual_chair_dist[index]
-                chair_distance = self.recorded_depth[(point_y, point_x)]
+            # get the distance set on startup to compare to the actual distance
+            usual_dist = self.usual_chair_dist[index]
+            chair_distance = cv_depth_image[(point_y, point_x)]
 
-                color = (255, 0, 0) # BLUE
+            color = (255, 0, 0) # BLUE
 
-                # if the current distance is different than the usual distance (plus a threshold)
-                # increment the NOT empty spaces
-                # also set color to red instead of blue
-                # NOTE threshold hardcoded
-                if (chair_distance > usual_dist + self.chair_threshold \
-                    or chair_distance < usual_dist - self.chair_threshold):
-                    num_not_empty += 1
-                    color = (0, 0, 255) # RED
-
-
-                # draw circle and print info at that point
-                cv2.circle(cv_image, (point_x, point_y), 4, color, thickness=2)
-                cv2.putText(cv_image, "dist: {:.2f}".format(chair_distance), (point_x + 5, point_y + 5), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA, False)
-
-            # set empty to false if a point is NOT empty (self-explanitory but i'm commenting literally everything)
-            if num_not_empty > 1:
-                self.num_consecutive_passenger += 1
-                if (self.num_consecutive_passenger > self.num_consecutive_threshold):
-                    empty = False
-            else:
-                self.num_consecutive_passenger = 0
+            # if the current distance is different than the usual distance (plus a threshold)
+            # increment the NOT empty spaces
+            # also set color to red instead of blue
+            # NOTE threshold hardcoded
+            if (chair_distance > usual_dist + self.chair_threshold \
+                or chair_distance < usual_dist - self.chair_threshold):
+                num_not_empty += 1
+                color = (0, 0, 255) # RED
 
 
-            # Process image for poses
-            datum = op.Datum()
-            datum.cvInputData = cv_image
-            self.opWrapper.emplaceAndPop(op.VectorDatum([datum]))
+            # draw circle and print info at that point
+            cv2.circle(cv_image, (point_x, point_y), 4, color, thickness=2)
+            cv2.putText(cv_image, "dist: {:.2f}".format(chair_distance), (point_x + 5, point_y + 5), 
+            cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA, False)
 
-            # Get the poses found
-            poseKeypoints = datum.poseKeypoints
+        # set empty to false if a point is NOT empty (self-explanitory but i'm commenting literally everything)
+        if num_not_empty > 1:
+            self.num_consecutive_passenger += 1
+            if (self.num_consecutive_passenger > self.num_consecutive_threshold):
+                empty = False
+        else:
+            self.num_consecutive_passenger = 0
 
-            # for those poses found 
-            if poseKeypoints is not None and len(poseKeypoints) > 0:
-                for pose in poseKeypoints:
 
+        # Process image for poses
+        datum = op.Datum()
+        datum.cvInputData = cv_image
+        self.opWrapper.emplaceAndPop(op.VectorDatum([datum]))
+
+        # Get the poses found
+        poseKeypoints = datum.poseKeypoints
+
+        # for those poses found 
+        if poseKeypoints is not None and len(poseKeypoints) > 0:
+            for pose in poseKeypoints:
+            
+                try:
                     # get x and y locations of neck and shoulders 
                     x_neck = int(pose[1][0])
                     y_neck = int(pose[1][1])
@@ -193,11 +223,11 @@ class pose_tracking:
                     y_left_shoulder = int(pose[2][1])
                     x_right_shoulder = int(pose[5][0])
                     y_right_shoulder = int(pose[5][1])
-                    
+
                     # extract the distance from those recorded locations
-                    neck_distance = self.recorded_depth[(y_neck, x_neck)]
-                    left_shoulder_dist = self.recorded_depth[(y_left_shoulder, x_left_shoulder)]
-                    right_shoulder_dist = self.recorded_depth[(y_right_shoulder, x_right_shoulder)]
+                    neck_distance = cv_depth_image[(y_neck, x_neck)]
+                    left_shoulder_dist = cv_depth_image[(y_left_shoulder, x_left_shoulder)]
+                    right_shoulder_dist = cv_depth_image[(y_right_shoulder, x_right_shoulder)]
 
                     distance = float("-inf")
 
@@ -221,7 +251,7 @@ class pose_tracking:
 
                     # define distance text
                     distance_text = "dist: {:.2f}".format(distance)
-                    
+
                     # in boundaries with within our distance threshold
                     if (in_boundaries):
                         valid_pose += 1
@@ -237,6 +267,8 @@ class pose_tracking:
                         cv2.circle(cv_image, (x_neck, y_neck), 4, (0, 0, 255), thickness=2)
                         cv2.circle(cv_image, (x_left_shoulder, y_left_shoulder), 4, (0, 0, 255), thickness=2)
                         cv2.circle(cv_image, (x_right_shoulder, y_right_shoulder), 4, (0, 0, 255), thickness=2)
+                except IndexError as e:
+                    print e
 
         passenger_safe = True
         
@@ -251,36 +283,14 @@ class pose_tracking:
 
 
         self.sendCartEmptyPose(empty, passenger_safe)
+        img_msg_out = self.bridge.cv2_to_imgmsg(cv_image, "bgr8")
+        self.image_pub.publish(img_msg_out)
 
         # cv2.imshow("Frame", datum.cvOutputData)
-        cv2.imshow("Frame", cv_image)
-        cv2.waitKey(3)  
+        #cv2.imshow("Frame", cv_image)
+        #cv2.waitKey(3)
 
-    def classify_depth(self, data):
-        '''
-        Callback for depth zed image
-        Removes anything farther than the threshold
-        '''
-        try:
-            cv_image = self.bridge.imgmsg_to_cv2(data, "32FC1")
-        except CvBridgeError as e:
-            print(e)
 
-        # flip
-        # cv_image = cv2.flip(cv_image, -1)
-
-        # remove areas that are farther than our cart distance threshold
-        mask = cv2.inRange(cv_image, 0.0, self.depth_threshold)
-        cv_image = cv2.bitwise_and(cv_image, cv_image, mask=mask)
-
-        # smooth the image
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        cv_image = cv2.dilate(cv_image, kernel, 1)
-
-        self.recorded_depth = cv_image
-
-        # cv2.imshow("Frame", cv_image)
-        # cv2.waitKey(3)
 
 if __name__ == "__main__":
     try:
