@@ -3,7 +3,6 @@
     <arg name="fake" default="false"/>
   
     <group unless="$(arg fake)">
-        <include file="$(find cart_endpoints)/launch/zed.launch"/>
         <node pkg="rqt_image_view" type="rqt_image_view" name="image_view_debug" args="/pose_image"/>
         <node name="pose_tracking" pkg="jacart-zed" type="pose_tracking.py" output="screen"/>
    </group> 
